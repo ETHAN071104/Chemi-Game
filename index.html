@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VSEPR 3D Builder</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a2e; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        
+        /* Custom Scrollbar for UI panel */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(255,255,255,0.1); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 3px; }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: all 0.3s ease;
+        }
+
+        .btn-action {
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn-action:active { transform: scale(0.95); }
+        .btn-action:hover { filter: brightness(1.2); }
+
+        .tooltip {
+            visibility: hidden;
+            background-color: rgba(0,0,0,0.8);
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.3s;
+            width: 200px;
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+        .has-tooltip:hover .tooltip { visibility: visible; opacity: 1; }
+        
+        /* Animation for success */
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+        .success-pulse { animation: pulse-green 1.5s infinite; }
+
+        /* Hide details by default */
+        .details-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out, opacity 0.3s ease;
+            opacity: 0;
+        }
+        .details-content.open {
+            max-height: 500px; /* Arbitrary large number */
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay -->
+    <div class="absolute top-0 left-0 w-full p-4 pointer-events-none flex justify-between items-start z-10">
+        <!-- Header -->
+        <div class="glass-panel p-4 rounded-xl pointer-events-auto max-w-md">
+            <h1 id="app-title" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">VSEPR 3D 构建大师</h1>
+            <p id="app-subtitle" class="text-sm text-gray-300 mt-1">价层电子对互斥理论模拟器</p>
+        </div>
+
+        <div class="flex flex-col gap-2 items-end">
+             <!-- Language Toggle -->
+             <button id="lang-btn" class="glass-panel px-3 py-1 rounded-lg pointer-events-auto text-xs font-bold hover:bg-white/20 text-blue-200 border-blue-300/30">
+                EN / 中文
+            </button>
+
+            <!-- Level/Target Info -->
+            <div class="glass-panel p-4 rounded-xl pointer-events-auto text-right max-w-xs">
+                <div id="target-label" class="text-xs text-gray-400 uppercase tracking-wider">当前任务</div>
+                <div id="level-target" class="text-xl font-bold text-yellow-400">自由模式</div>
+                <div id="level-desc" class="text-sm text-gray-300 mt-1">自由探索分子结构</div>
+                <button id="next-level-btn" class="mt-2 bg-green-600 hover:bg-green-500 text-white text-xs py-1 px-3 rounded hidden">下一关 &rarr;</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Panel (Bottom Left) - Simplified -->
+    <div class="absolute bottom-4 left-4 glass-panel p-4 rounded-xl pointer-events-auto w-64 z-10 transition-all">
+        <!-- Main Simple View -->
+        <div class="mb-2">
+            <span id="shape-label" class="text-gray-400 block text-xs uppercase tracking-widest">分子形状</span>
+            <span id="molecular-geo" class="font-bold text-green-300 text-2xl leading-tight block my-1">原子</span>
+            <span id="bond-angle" class="font-mono text-gray-200 text-sm bg-white/10 px-2 py-0.5 rounded">-</span>
+        </div>
+
+        <!-- Toggle Details Button -->
+        <button id="toggle-details-btn" class="w-full mt-2 text-xs text-blue-300 hover:text-blue-100 border border-blue-500/30 rounded py-1 hover:bg-blue-500/20 transition-colors flex justify-center items-center gap-1">
+            <span id="details-btn-text">显示数据详情</span>
+            <svg id="chevron-icon" class="w-3 h-3 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </button>
+        
+        <!-- Complex Data (Hidden by default) -->
+        <div id="details-content" class="details-content mt-2 pt-2 border-t border-gray-600 space-y-2 text-sm">
+            <div class="flex justify-between">
+                <span id="label-bp" class="text-gray-400">键合原子 (BP):</span>
+                <span id="bp-count" class="font-mono font-bold text-blue-300">0</span>
+            </div>
+            <div class="flex justify-between">
+                <span id="label-lp" class="text-gray-400">孤对电子 (LP):</span>
+                <span id="lp-count" class="font-mono font-bold text-yellow-300">0</span>
+            </div>
+            <div class="flex justify-between">
+                <span id="label-sn" class="text-gray-400">价层电子对总数:</span>
+                <span id="steric-num" class="font-mono font-bold">0</span>
+            </div>
+            <div>
+                <span id="label-egeo" class="text-gray-400 block text-xs mt-1">电子几何构型</span>
+                <span id="electron-geo" class="font-bold text-purple-300">N/A</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls (Bottom Center/Right) -->
+    <div class="absolute bottom-8 right-4 md:right-auto md:left-1/2 md:transform md:-translate-x-1/2 glass-panel p-2 rounded-2xl pointer-events-auto flex gap-4 items-center z-10">
+        <div class="has-tooltip relative">
+            <button id="add-bond" class="btn-action w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-500 flex items-center justify-center shadow-lg border-2 border-blue-400">
+                <div class="flex flex-col items-center">
+                    <div class="w-3 h-3 bg-white rounded-full mb-0.5"></div>
+                    <span id="btn-bond-text" class="text-[10px] font-bold">+键</span>
+                </div>
+            </button>
+            <span id="tooltip-bond" class="tooltip">添加一个键合原子</span>
+        </div>
+
+        <div class="has-tooltip relative">
+            <button id="add-lp" class="btn-action w-14 h-14 rounded-full bg-yellow-600 hover:bg-yellow-500 flex items-center justify-center shadow-lg border-2 border-yellow-400">
+                <div class="flex flex-col items-center">
+                    <div class="flex gap-0.5 mb-0.5">
+                        <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+                        <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+                    </div>
+                    <span id="btn-lp-text" class="text-[10px] font-bold">+孤对</span>
+                </div>
+            </button>
+            <span id="tooltip-lp" class="tooltip">添加一对孤对电子</span>
+        </div>
+
+        <div class="w-px h-10 bg-gray-500 mx-2"></div>
+
+        <button id="remove-item" class="btn-action w-12 h-12 rounded-full bg-red-900/80 hover:bg-red-700 flex items-center justify-center border border-red-500 text-white" title="Remove Last">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
+            </svg>
+        </button>
+
+        <button id="reset-btn" class="btn-action w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center border border-gray-500 text-white" title="Reset">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/90 text-white px-6 py-4 rounded-xl text-center shadow-2xl transition-opacity duration-500 opacity-0 pointer-events-none z-50 border border-white/20">
+        <h2 id="toast-title" class="text-xl font-bold mb-1 text-green-400">完成！</h2>
+        <p id="toast-msg">你成功构建了目标分子。</p>
+    </div>
+
+    <script>
+        // --- Game State & Data ---
+        const gameState = {
+            bonds: 0,
+            lonePairs: 0,
+            currentLevel: 0,
+            mode: 'free', // 'free' or 'level'
+            lang: 'zh', // 'zh' or 'en'
+            detailsOpen: false
+        };
+
+        // UI Translations
+        const TRANSLATIONS = {
+            zh: {
+                appTitle: "VSEPR 3D 构建大师",
+                appSubtitle: "价层电子对互斥理论模拟器",
+                targetLabel: "当前任务",
+                freeModeTitle: "自由模式",
+                freeModeDesc: "自由探索分子结构",
+                startLevelBtn: "开始闯关",
+                nextLevelBtn: "下一关",
+                shapeLabel: "分子形状",
+                detailsShow: "显示数据详情",
+                detailsHide: "隐藏数据详情",
+                labelBP: "键合原子 (BP):",
+                labelLP: "孤对电子 (LP):",
+                labelSN: "价层电子对总数:",
+                labelEGeo: "电子几何构型:",
+                btnBond: "+键",
+                btnLP: "+孤对",
+                tooltipBond: "添加一个键合原子",
+                tooltipLP: "添加一对孤对电子",
+                toastTitle: "完成！",
+                toastLimitTitle: "上限已达",
+                toastLimitMsg: "本模拟器最高支持 Steric Number = 6 (八面体)",
+                toastWinTitle: "通关！",
+                toastWinMsg: "你已经掌握了主要的 VSEPR 构型。进入自由模式。",
+                atomName: "原子",
+                atomIsolated: "孤立原子",
+                geoUndefined: "未定义 / 不稳定",
+                geoComplex: "复杂",
+                levelTargetPrefix: "目标: "
+            },
+            en: {
+                appTitle: "VSEPR 3D Builder",
+                appSubtitle: "Valence Shell Electron Pair Repulsion Simulator",
+                targetLabel: "Current Goal",
+                freeModeTitle: "Free Mode",
+                freeModeDesc: "Explore molecular structures freely",
+                startLevelBtn: "Start Levels",
+                nextLevelBtn: "Next Level",
+                shapeLabel: "Molecular Shape",
+                detailsShow: "Show Details",
+                detailsHide: "Hide Details",
+                labelBP: "Bonding Pairs (BP):",
+                labelLP: "Lone Pairs (LP):",
+                labelSN: "Steric Number:",
+                labelEGeo: "Electron Geometry:",
+                btnBond: "+Bond",
+                btnLP: "+Lone",
+                tooltipBond: "Add a Bonding Pair",
+                tooltipLP: "Add a Lone Pair",
+                toastTitle: "Success!",
+                toastLimitTitle: "Limit Reached",
+                toastLimitMsg: "Max Steric Number = 6 (Octahedral) supported.",
+                toastWinTitle: "All Clear!",
+                toastWinMsg: "You've mastered the main VSEPR shapes. Entering Free Mode.",
+                atomName: "Atom",
+                atomIsolated: "Isolated Atom",
+                geoUndefined: "Undefined / Unstable",
+                geoComplex: "Complex",
+                levelTargetPrefix: "Target: "
+            }
+        };
+
+        // VSEPR Data with Dual Language
+        const VSEPR_DATA = {
+            // Key: "Bonds,LonePairs"
+            "1,0": { 
+                zh: { name: "双原子分子", eGeo: "线性" }, 
+                en: { name: "Diatomic", eGeo: "Linear" }, 
+                angle: "180°" 
+            },
+            "2,0": { 
+                zh: { name: "直线形 (Linear)", eGeo: "直线形" }, 
+                en: { name: "Linear", eGeo: "Linear" }, 
+                angle: "180°" 
+            },
+            "3,0": { 
+                zh: { name: "平面三角形 (Trigonal Planar)", eGeo: "平面三角形" }, 
+                en: { name: "Trigonal Planar", eGeo: "Trigonal Planar" }, 
+                angle: "120°" 
+            },
+            "2,1": { 
+                zh: { name: "V形 / 弯曲形 (Bent)", eGeo: "平面三角形" }, 
+                en: { name: "Bent", eGeo: "Trigonal Planar" }, 
+                angle: "<120°" 
+            },
+            "4,0": { 
+                zh: { name: "正四面体 (Tetrahedral)", eGeo: "四面体" }, 
+                en: { name: "Tetrahedral", eGeo: "Tetrahedral" }, 
+                angle: "109.5°" 
+            },
+            "3,1": { 
+                zh: { name: "三角锥形 (Trigonal Pyramidal)", eGeo: "四面体" }, 
+                en: { name: "Trigonal Pyramidal", eGeo: "Tetrahedral" }, 
+                angle: "<109.5°" 
+            },
+            "2,2": { 
+                zh: { name: "V形 / 弯曲形 (Bent)", eGeo: "四面体" }, 
+                en: { name: "Bent", eGeo: "Tetrahedral" }, 
+                angle: "<<109.5°" 
+            },
+            "5,0": { 
+                zh: { name: "三角双锥 (Trigonal Bipyramidal)", eGeo: "三角双锥" }, 
+                en: { name: "Trigonal Bipyramidal", eGeo: "Trigonal Bipyramidal" }, 
+                angle: "90°, 120°" 
+            },
+            "4,1": { 
+                zh: { name: "跷跷板形 (Seesaw)", eGeo: "三角双锥" }, 
+                en: { name: "Seesaw", eGeo: "Trigonal Bipyramidal" }, 
+                angle: "<90°, <120°" 
+            },
+            "3,2": { 
+                zh: { name: "T字形 (T-shaped)", eGeo: "三角双锥" }, 
+                en: { name: "T-shaped", eGeo: "Trigonal Bipyramidal" }, 
+                angle: "<90°" 
+            },
+            "2,3": { 
+                zh: { name: "直线形 (Linear)", eGeo: "三角双锥" }, 
+                en: { name: "Linear", eGeo: "Trigonal Bipyramidal" }, 
+                angle: "180°" 
+            },
+            "6,0": { 
+                zh: { name: "八面体 (Octahedral)", eGeo: "八面体" }, 
+                en: { name: "Octahedral", eGeo: "Octahedral" }, 
+                angle: "90°" 
+            },
+            "5,1": { 
+                zh: { name: "四角锥形 (Square Pyramidal)", eGeo: "八面体" }, 
+                en: { name: "Square Pyramidal", eGeo: "Octahedral" }, 
+                angle: "<90°" 
+            },
+            "4,2": { 
+                zh: { name: "平面四方形 (Square Planar)", eGeo: "八面体" }, 
+                en: { name: "Square Planar", eGeo: "Octahedral" }, 
+                angle: "90°" 
+            }
+        };
+
+        const LEVELS = [
+            { 
+                targetBonds: 2, targetLone: 0, 
+                zh: { title: "第 1 关: 氯化铍 (BeCl2)", desc: "BeCl2 是直线形分子。中心原子Be没有孤对电子，只有两个成键原子。" },
+                en: { title: "Level 1: Beryllium Chloride (BeCl2)", desc: "BeCl2 is linear. The central Be atom has no lone pairs, only two bonding atoms." }
+            },
+            { 
+                targetBonds: 3, targetLone: 0, 
+                zh: { title: "第 2 关: 三氟化硼 (BF3)", desc: "BF3 是平面三角形。三个氟原子尽可能远离，形成120度角。" },
+                en: { title: "Level 2: Boron Trifluoride (BF3)", desc: "BF3 is Trigonal Planar. Three Fluorine atoms spread out to 120°." }
+            },
+            { 
+                targetBonds: 4, targetLone: 0, 
+                zh: { title: "第 3 关: 甲烷 (CH4)", desc: "经典的正四面体结构。四个氢原子在空间中均匀分布，键角109.5度。" },
+                en: { title: "Level 3: Methane (CH4)", desc: "Classic Tetrahedral structure. Four Hydrogen atoms spread evenly at 109.5°." }
+            },
+            { 
+                targetBonds: 3, targetLone: 1, 
+                zh: { title: "第 4 关: 氨气 (NH3)", desc: "注意！虽然有4个电子域，但其中一个是孤对电子。孤对电子排斥力更大，把氢原子挤向一边。" },
+                en: { title: "Level 4: Ammonia (NH3)", desc: "Attention! One domain is a Lone Pair. It repels more strongly, pushing Hydrogens into a pyramid." }
+            },
+            { 
+                targetBonds: 2, targetLone: 2, 
+                zh: { title: "第 5 关: 水 (H2O)", desc: "水分子是弯曲的（V形）。氧原子有两个孤对电子，极大地压缩了键角。" },
+                en: { title: "Level 5: Water (H2O)", desc: "Water is Bent. Two lone pairs on Oxygen compress the bond angle significantly." }
+            },
+            { 
+                targetBonds: 5, targetLone: 0, 
+                zh: { title: "第 6 关: 五氯化磷 (PCl5)", desc: "扩展八隅体！这是三角双锥结构。" },
+                en: { title: "Level 6: Phosphorus Pentachloride (PCl5)", desc: "Expanded octet! This is Trigonal Bipyramidal." }
+            },
+            { 
+                targetBonds: 4, targetLone: 2, 
+                zh: { title: "第 7 关: 四氟化氙 (XeF4)", desc: "稀有气体也能反应！2对孤对电子在轴向位置相互抵消，形成平面四方形结构。" },
+                en: { title: "Level 7: Xenon Tetrafluoride (XeF4)", desc: "Noble gas reaction! 2 lone pairs in axial positions cancel out, forming Square Planar." }
+            }
+        ];
+
+        // --- Three.js Setup ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x1a1a2e, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(5, 3, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+        const pointLight = new THREE.PointLight(0x3366ff, 1, 10);
+        pointLight.position.set(-2, 2, -2);
+        scene.add(pointLight);
+
+        const moleculeGroup = new THREE.Group();
+        scene.add(moleculeGroup);
+
+        // Materials
+        const centerAtomMat = new THREE.MeshStandardMaterial({ color: 0x9c27b0, roughness: 0.3, metalness: 0.2 });
+        const bondAtomMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.1 });
+        const bondStickMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+        const lonePairMat = new THREE.MeshPhongMaterial({ color: 0xffcc00, transparent: true, opacity: 0.6, emissive: 0xffaa00, emissiveIntensity: 0.2, shininess: 100 });
+
+        // Geometry Logic
+        function getVectors(bonds, lonePairs) {
+            const total = bonds + lonePairs;
+            let vectors = [];
+            if (total === 1) {
+                // Added safe fallback for single atom/lonepair
+                vectors = [[1, 0, 0]]; 
+            } else if (total === 2) vectors = [[1,0,0], [-1,0,0]];
+            else if (total === 3) {
+                const a = 2 * Math.PI / 3;
+                vectors = [[Math.cos(0), Math.sin(0), 0], [Math.cos(a), Math.sin(a), 0], [Math.cos(2*a), Math.sin(2*a), 0]];
+            } else if (total === 4) {
+                vectors = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]];
+            } else if (total === 5) {
+                const eqA = 2 * Math.PI / 3;
+                vectors = [[Math.cos(0), 0, Math.sin(0)], [Math.cos(eqA), 0, Math.sin(eqA)], [Math.cos(2*eqA), 0, Math.sin(2*eqA)], [0, 1, 0], [0, -1, 0]];
+            } else if (total === 6) {
+                vectors = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+            }
+            return vectors.map(v => {
+                const vec = new THREE.Vector3(v[0], v[1], v[2]);
+                vec.normalize();
+                return vec;
+            });
+        }
+
+        function sortVectors(vectors, bonds, lonePairs) {
+            const total = bonds + lonePairs;
+            const assigned = { bonds: [], lps: [] };
+            
+            // Guard clause for empty vectors
+            if (!vectors || vectors.length === 0) return assigned;
+
+            if (total === 5) {
+                for(let i=0; i<lonePairs; i++) assigned.lps.push(vectors[i]);
+                for(let i=lonePairs; i<total; i++) assigned.bonds.push(vectors[i]);
+            } else if (total === 6) {
+                // For Octahedral we manually recreate vectors for better visualization order
+                const octOrder = [new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0), new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0), new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)];
+                for(let i=0; i<lonePairs; i++) assigned.lps.push(octOrder[i]);
+                for(let i=lonePairs; i<total; i++) assigned.bonds.push(octOrder[i]);
+            } else {
+                for (let i = 0; i < lonePairs; i++) {
+                    // Use Math.max to prevent negative index access just in case, though total-1-i should be safe
+                    const idx = Math.max(0, total - 1 - i);
+                    if(vectors[idx]) assigned.lps.push(vectors[idx]);
+                }
+                for (let i = 0; i < bonds; i++) {
+                    if(vectors[i]) assigned.bonds.push(vectors[i]);
+                }
+            }
+            return assigned;
+        }
+
+        // --- Main Render Logic ---
+        function renderMolecule() {
+            while(moleculeGroup.children.length > 0){ moleculeGroup.remove(moleculeGroup.children[0]); }
+
+            const bonds = gameState.bonds;
+            const lone = gameState.lonePairs;
+            const total = bonds + lone;
+            const t = TRANSLATIONS[gameState.lang];
+
+            // Central Atom
+            const centerGeo = new THREE.SphereGeometry(1, 32, 32);
+            const centerMesh = new THREE.Mesh(centerGeo, centerAtomMat);
+            centerMesh.castShadow = true;
+            moleculeGroup.add(centerMesh);
+
+            // Update Stats Panel
+            document.getElementById('bp-count').innerText = bonds;
+            document.getElementById('lp-count').innerText = lone;
+            document.getElementById('steric-num').innerText = total;
+
+            const dataKey = `${bonds},${lone}`;
+            const info = VSEPR_DATA[dataKey];
+            
+            if (info) {
+                document.getElementById('molecular-geo').innerText = info[gameState.lang].name;
+                document.getElementById('electron-geo').innerText = info[gameState.lang].eGeo;
+                document.getElementById('bond-angle').innerText = info.angle;
+            } else {
+                if(bonds > 0) {
+                     document.getElementById('molecular-geo').innerText = t.geoUndefined;
+                     document.getElementById('electron-geo').innerText = t.geoComplex;
+                     document.getElementById('bond-angle').innerText = "-";
+                } else {
+                    document.getElementById('molecular-geo').innerText = total === 0 ? t.atomName : t.atomIsolated;
+                    document.getElementById('electron-geo').innerText = "-";
+                    document.getElementById('bond-angle').innerText = "-";
+                }
+            }
+
+            if (total === 0) return;
+
+            let rawVectors = getVectors(bonds, lone);
+            let assignedPos = sortVectors(rawVectors, bonds, lone);
+
+            // Bonds
+            assignedPos.bonds.forEach(vec => {
+                if (!vec) return; // Safety check
+                const distance = 2.5;
+                const pos = vec.clone().multiplyScalar(distance);
+                const stickHeight = distance - 0.5; 
+                const stickGeo = new THREE.CylinderGeometry(0.2, 0.2, stickHeight, 16);
+                stickGeo.translate(0, stickHeight/2, 0);
+                const stickMesh = new THREE.Mesh(stickGeo, bondStickMat);
+                stickMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), vec);
+                moleculeGroup.add(stickMesh);
+                const atomGeo = new THREE.SphereGeometry(0.7, 32, 32);
+                const atomMesh = new THREE.Mesh(atomGeo, bondAtomMat);
+                atomMesh.position.copy(pos);
+                atomMesh.castShadow = true;
+                moleculeGroup.add(atomMesh);
+            });
+
+            // Lone Pairs
+            assignedPos.lps.forEach(vec => {
+                if (!vec) return; // Safety check
+                const distance = 1.8;
+                const pos = vec.clone().multiplyScalar(distance);
+                const lpGeo = new THREE.SphereGeometry(0.8, 32, 32);
+                lpGeo.scale(1, 1.5, 1); 
+                lpGeo.translate(0, 0.8, 0); 
+                const lpMesh = new THREE.Mesh(lpGeo, lonePairMat);
+                lpMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), vec);
+                moleculeGroup.add(lpMesh);
+                const dotGeo = new THREE.SphereGeometry(0.15, 8, 8);
+                const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                const e1 = new THREE.Mesh(dotGeo, dotMat); e1.position.set(0.3, 1.2, 0); lpMesh.add(e1);
+                const e2 = new THREE.Mesh(dotGeo, dotMat); e2.position.set(-0.3, 1.2, 0); lpMesh.add(e2);
+            });
+
+            checkLevelProgress();
+        }
+
+        function checkLevelProgress() {
+            if (gameState.mode !== 'level') return;
+            const target = LEVELS[gameState.currentLevel];
+            const t = TRANSLATIONS[gameState.lang];
+            if (gameState.bonds === target.targetBonds && gameState.lonePairs === target.targetLone) {
+                showToast(`${t.toastTitle} ${target[gameState.lang].title.split(':')[0]}`, target[gameState.lang].desc);
+                const btn = document.getElementById('next-level-btn');
+                btn.classList.remove('hidden');
+                btn.classList.add('success-pulse');
+            }
+        }
+
+        function showToast(title, msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-msg').innerText = msg;
+            toast.style.opacity = '1';
+            toast.style.top = '40%';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.top = '50%';
+            }, 4000);
+        }
+
+        // --- UI Logic ---
+        function updateStaticUI() {
+            const t = TRANSLATIONS[gameState.lang];
+            document.getElementById('app-title').innerText = t.appTitle;
+            document.getElementById('app-subtitle').innerText = t.appSubtitle;
+            document.getElementById('target-label').innerText = t.targetLabel;
+            document.getElementById('shape-label').innerText = t.shapeLabel;
+            document.getElementById('details-btn-text').innerText = gameState.detailsOpen ? t.detailsHide : t.detailsShow;
+            document.getElementById('label-bp').innerText = t.labelBP;
+            document.getElementById('label-lp').innerText = t.labelLP;
+            document.getElementById('label-sn').innerText = t.labelSN;
+            document.getElementById('label-egeo').innerText = t.labelEGeo;
+            document.getElementById('btn-bond-text').innerText = t.btnBond;
+            document.getElementById('btn-lp-text').innerText = t.btnLP;
+            document.getElementById('tooltip-bond').innerText = t.tooltipBond;
+            document.getElementById('tooltip-lp').innerText = t.tooltipLP;
+            
+            const nextBtn = document.getElementById('next-level-btn');
+            if (nextBtn.innerText.includes("→")) { // keep arrow
+                nextBtn.innerHTML = `${t.nextLevelBtn} &rarr;`;
+            } else {
+                nextBtn.innerText = t.startLevelBtn;
+            }
+
+            updateLevelUI(); // Refresh level texts
+            renderMolecule(); // Refresh molecule texts
+        }
+
+        function updateLevelUI() {
+            const t = TRANSLATIONS[gameState.lang];
+            const infoBox = document.getElementById('level-target');
+            const descBox = document.getElementById('level-desc');
+            const nextBtn = document.getElementById('next-level-btn');
+
+            if (gameState.mode === 'free') {
+                infoBox.innerText = t.freeModeTitle;
+                descBox.innerText = t.freeModeDesc;
+                nextBtn.innerText = t.startLevelBtn;
+                nextBtn.classList.remove('hidden');
+                nextBtn.onclick = () => {
+                    gameState.mode = 'level';
+                    gameState.currentLevel = 0;
+                    gameState.bonds = 0;
+                    gameState.lonePairs = 0;
+                    renderMolecule();
+                    updateLevelUI();
+                    nextBtn.onclick = null; 
+                };
+            } else {
+                const lvl = LEVELS[gameState.currentLevel];
+                infoBox.innerText = lvl[gameState.lang].title;
+                descBox.innerText = `${t.levelTargetPrefix}${t.shapeLabel}...`; // Keep it brief in target box
+                nextBtn.innerHTML = `${t.nextLevelBtn} &rarr;`;
+                nextBtn.classList.add('hidden');
+                nextBtn.classList.remove('success-pulse');
+            }
+        }
+
+        // --- Event Listeners ---
+        document.getElementById('lang-btn').addEventListener('click', () => {
+            gameState.lang = gameState.lang === 'zh' ? 'en' : 'zh';
+            updateStaticUI();
+        });
+
+        document.getElementById('toggle-details-btn').addEventListener('click', () => {
+            gameState.detailsOpen = !gameState.detailsOpen;
+            const content = document.getElementById('details-content');
+            const icon = document.getElementById('chevron-icon');
+            const t = TRANSLATIONS[gameState.lang];
+            
+            if (gameState.detailsOpen) {
+                content.classList.add('open');
+                icon.classList.add('rotate-180');
+                document.getElementById('details-btn-text').innerText = t.detailsHide;
+            } else {
+                content.classList.remove('open');
+                icon.classList.remove('rotate-180');
+                document.getElementById('details-btn-text').innerText = t.detailsShow;
+            }
+        });
+
+        document.getElementById('add-bond').addEventListener('click', () => {
+            const t = TRANSLATIONS[gameState.lang];
+            if (gameState.bonds + gameState.lonePairs < 6) {
+                gameState.bonds++;
+                renderMolecule();
+            } else {
+                showToast(t.toastLimitTitle, t.toastLimitMsg);
+            }
+        });
+
+        document.getElementById('add-lp').addEventListener('click', () => {
+            const t = TRANSLATIONS[gameState.lang];
+            if (gameState.bonds + gameState.lonePairs < 6) {
+                gameState.lonePairs++;
+                renderMolecule();
+            } else {
+                showToast(t.toastLimitTitle, t.toastLimitMsg);
+            }
+        });
+
+        document.getElementById('remove-item').addEventListener('click', () => {
+            if (gameState.lonePairs > 0) gameState.lonePairs--;
+            else if (gameState.bonds > 0) gameState.bonds--;
+            renderMolecule();
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            gameState.bonds = 0;
+            gameState.lonePairs = 0;
+            renderMolecule();
+        });
+
+        document.getElementById('next-level-btn').addEventListener('click', () => {
+            const t = TRANSLATIONS[gameState.lang];
+            gameState.currentLevel++;
+            if (gameState.currentLevel >= LEVELS.length) {
+                gameState.currentLevel = 0;
+                showToast(t.toastWinTitle, t.toastWinMsg);
+                gameState.mode = 'free';
+                updateLevelUI();
+                return;
+            }
+            gameState.bonds = 0;
+            gameState.lonePairs = 0;
+            updateLevelUI();
+            renderMolecule();
+        });
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- Init ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        gameState.mode = 'level'; 
+        updateStaticUI(); // Will trigger level UI update and render
+        animate();
+
+    </script>
+</body>
+</html>
