@@ -1,14 +1,24 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>VSEPR 3D Builder</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #1a1a2e; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        /* Mobile Safety: Prevent scrolling/zooming on body, disable text selection */
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #1a1a2e; 
+            color: white; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* Critical for mobile 3D interaction */
+            user-select: none;
+            -webkit-user-select: none;
+        }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
         
         /* Custom Scrollbar for UI panel */
@@ -29,10 +39,14 @@
             transition: all 0.2s;
             position: relative;
             overflow: hidden;
+            /* Better touch targets */
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
         }
         .btn-action:active { transform: scale(0.95); }
         .btn-action:hover { filter: brightness(1.2); }
 
+        /* Tooltips hidden on touch devices usually, but kept for desktop mouseover */
         .tooltip {
             visibility: hidden;
             background-color: rgba(0,0,0,0.8);
@@ -41,19 +55,21 @@
             border-radius: 6px;
             padding: 5px;
             position: absolute;
-            z-index: 1;
-            bottom: 125%;
+            z-index: 50;
+            bottom: 130%;
             left: 50%;
             transform: translateX(-50%);
             opacity: 0;
             transition: opacity 0.3s;
-            width: 200px;
+            width: max-content;
+            max-width: 200px;
             font-size: 0.8rem;
             pointer-events: none;
         }
-        .has-tooltip:hover .tooltip { visibility: visible; opacity: 1; }
+        @media (hover: hover) {
+            .has-tooltip:hover .tooltip { visibility: visible; opacity: 1; }
+        }
         
-        /* Animation for success */
         @keyframes pulse-green {
             0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
             70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
@@ -61,7 +77,6 @@
         }
         .success-pulse { animation: pulse-green 1.5s infinite; }
 
-        /* Hide details by default */
         .details-content {
             max-height: 0;
             overflow: hidden;
@@ -69,7 +84,7 @@
             opacity: 0;
         }
         .details-content.open {
-            max-height: 500px; /* Arbitrary large number */
+            max-height: 500px; 
             opacity: 1;
         }
     </style>
@@ -79,110 +94,113 @@
     <!-- 3D Canvas -->
     <div id="canvas-container"></div>
 
-    <!-- UI Overlay -->
-    <div class="absolute top-0 left-0 w-full p-4 pointer-events-none flex justify-between items-start z-10">
+    <!-- UI Overlay Container -->
+    <!-- Used specific layout: Left Column (Title + Info), Right Column (Lang + Level), Bottom (Controls) -->
+    
+    <!-- Top Left: Title & Info Panel -->
+    <div class="absolute top-0 left-0 p-4 flex flex-col gap-4 pointer-events-none z-10 max-w-[50%] md:max-w-md">
         <!-- Header -->
-        <div class="glass-panel p-4 rounded-xl pointer-events-auto max-w-md">
-            <h1 id="app-title" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">VSEPR 3D 构建大师</h1>
-            <p id="app-subtitle" class="text-sm text-gray-300 mt-1">价层电子对互斥理论模拟器</p>
+        <div class="glass-panel p-3 md:p-4 rounded-xl pointer-events-auto">
+            <h1 id="app-title" class="text-lg md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 leading-tight">VSEPR 3D Builder</h1>
+            <p id="app-subtitle" class="text-xs md:text-sm text-gray-300 mt-1 hidden md:block">Valence Shell Electron Pair Repulsion Simulator</p>
         </div>
 
-        <div class="flex flex-col gap-2 items-end">
-             <!-- Language Toggle -->
-             <button id="lang-btn" class="glass-panel px-3 py-1 rounded-lg pointer-events-auto text-xs font-bold hover:bg-white/20 text-blue-200 border-blue-300/30">
-                EN / 中文
-            </button>
+        <!-- Info Panel (Moved here for mobile safety) -->
+        <div class="glass-panel p-3 md:p-4 rounded-xl pointer-events-auto w-full transition-all">
+            <div class="mb-1">
+                <span id="shape-label" class="text-gray-400 block text-[10px] md:text-xs uppercase tracking-widest">Molecular Shape</span>
+                <span id="molecular-geo" class="font-bold text-green-300 text-lg md:text-2xl leading-tight block my-0.5">Atom</span>
+                <span id="bond-angle" class="font-mono text-gray-200 text-xs md:text-sm bg-white/10 px-2 py-0.5 rounded inline-block">-</span>
+            </div>
 
-            <!-- Level/Target Info -->
-            <div class="glass-panel p-4 rounded-xl pointer-events-auto text-right max-w-xs">
-                <div id="target-label" class="text-xs text-gray-400 uppercase tracking-wider">当前任务</div>
-                <div id="level-target" class="text-xl font-bold text-yellow-400">自由模式</div>
-                <div id="level-desc" class="text-sm text-gray-300 mt-1">自由探索分子结构</div>
-                <button id="next-level-btn" class="mt-2 bg-green-600 hover:bg-green-500 text-white text-xs py-1 px-3 rounded hidden">下一关 &rarr;</button>
+            <!-- Toggle Details Button -->
+            <button id="toggle-details-btn" class="w-full mt-2 text-[10px] md:text-xs text-blue-300 hover:text-blue-100 border border-blue-500/30 rounded py-1 hover:bg-blue-500/20 transition-colors flex justify-center items-center gap-1">
+                <span id="details-btn-text">Show Details</span>
+                <svg id="chevron-icon" class="w-3 h-3 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            
+            <!-- Details -->
+            <div id="details-content" class="details-content mt-2 pt-2 border-t border-gray-600 space-y-1 text-xs md:text-sm">
+                <div class="flex justify-between">
+                    <span id="label-bp" class="text-gray-400">Bonding Pairs (BP):</span>
+                    <span id="bp-count" class="font-mono font-bold text-blue-300">0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span id="label-lp" class="text-gray-400">Lone Pairs (LP):</span>
+                    <span id="lp-count" class="font-mono font-bold text-yellow-300">0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span id="label-sn" class="text-gray-400">Steric Number:</span>
+                    <span id="steric-num" class="font-mono font-bold">0</span>
+                </div>
+                <div>
+                    <span id="label-egeo" class="text-gray-400 block text-[10px] mt-1">Electron Geometry</span>
+                    <span id="electron-geo" class="font-bold text-purple-300">N/A</span>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Info Panel (Bottom Left) - Simplified -->
-    <div class="absolute bottom-4 left-4 glass-panel p-4 rounded-xl pointer-events-auto w-64 z-10 transition-all">
-        <!-- Main Simple View -->
-        <div class="mb-2">
-            <span id="shape-label" class="text-gray-400 block text-xs uppercase tracking-widest">分子形状</span>
-            <span id="molecular-geo" class="font-bold text-green-300 text-2xl leading-tight block my-1">原子</span>
-            <span id="bond-angle" class="font-mono text-gray-200 text-sm bg-white/10 px-2 py-0.5 rounded">-</span>
-        </div>
-
-        <!-- Toggle Details Button -->
-        <button id="toggle-details-btn" class="w-full mt-2 text-xs text-blue-300 hover:text-blue-100 border border-blue-500/30 rounded py-1 hover:bg-blue-500/20 transition-colors flex justify-center items-center gap-1">
-            <span id="details-btn-text">显示数据详情</span>
-            <svg id="chevron-icon" class="w-3 h-3 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    <!-- Top Right: Language & Level -->
+    <div class="absolute top-0 right-0 p-4 flex flex-col gap-2 items-end pointer-events-none z-10 max-w-[50%] md:max-w-xs">
+         <!-- Language Toggle -->
+         <button id="lang-btn" class="glass-panel px-3 py-1.5 rounded-lg pointer-events-auto text-[10px] md:text-xs font-bold hover:bg-white/20 text-blue-200 border-blue-300/30 shadow-md">
+            EN / 中文
         </button>
-        
-        <!-- Complex Data (Hidden by default) -->
-        <div id="details-content" class="details-content mt-2 pt-2 border-t border-gray-600 space-y-2 text-sm">
-            <div class="flex justify-between">
-                <span id="label-bp" class="text-gray-400">键合原子 (BP):</span>
-                <span id="bp-count" class="font-mono font-bold text-blue-300">0</span>
-            </div>
-            <div class="flex justify-between">
-                <span id="label-lp" class="text-gray-400">孤对电子 (LP):</span>
-                <span id="lp-count" class="font-mono font-bold text-yellow-300">0</span>
-            </div>
-            <div class="flex justify-between">
-                <span id="label-sn" class="text-gray-400">价层电子对总数:</span>
-                <span id="steric-num" class="font-mono font-bold">0</span>
-            </div>
-            <div>
-                <span id="label-egeo" class="text-gray-400 block text-xs mt-1">电子几何构型</span>
-                <span id="electron-geo" class="font-bold text-purple-300">N/A</span>
-            </div>
+
+        <!-- Level/Target Info -->
+        <div class="glass-panel p-3 md:p-4 rounded-xl pointer-events-auto text-right w-full">
+            <div id="target-label" class="text-[10px] text-gray-400 uppercase tracking-wider">Current Goal</div>
+            <div id="level-target" class="text-sm md:text-xl font-bold text-yellow-400 leading-tight">Free Mode</div>
+            <div id="level-desc" class="text-[10px] md:text-sm text-gray-300 mt-1 line-clamp-3">Explore molecular structures freely</div>
+            <button id="next-level-btn" class="mt-2 bg-green-600 hover:bg-green-500 text-white text-[10px] md:text-xs py-1.5 px-3 rounded hidden shadow-lg w-full md:w-auto font-bold tracking-wide">Next Level &rarr;</button>
         </div>
     </div>
 
-    <!-- Controls (Bottom Center/Right) -->
-    <div class="absolute bottom-8 right-4 md:right-auto md:left-1/2 md:transform md:-translate-x-1/2 glass-panel p-2 rounded-2xl pointer-events-auto flex gap-4 items-center z-10">
+    <!-- Bottom Center: Controls (Centered for Mobile Thumb Access) -->
+    <div class="absolute bottom-6 md:bottom-8 left-1/2 transform -translate-x-1/2 glass-panel p-2 md:p-3 rounded-full md:rounded-2xl pointer-events-auto flex gap-3 md:gap-4 items-center z-20 shadow-2xl border border-white/10">
         <div class="has-tooltip relative">
-            <button id="add-bond" class="btn-action w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-500 flex items-center justify-center shadow-lg border-2 border-blue-400">
-                <div class="flex flex-col items-center">
-                    <div class="w-3 h-3 bg-white rounded-full mb-0.5"></div>
-                    <span id="btn-bond-text" class="text-[10px] font-bold">+键</span>
+            <button id="add-bond" class="btn-action w-12 h-12 md:w-16 md:h-16 rounded-full bg-blue-600 hover:bg-blue-500 flex items-center justify-center shadow-lg border-2 border-blue-400 active:bg-blue-700">
+                <div class="flex flex-col items-center pointer-events-none">
+                    <div class="w-2.5 h-2.5 md:w-3 md:h-3 bg-white rounded-full mb-0.5"></div>
+                    <span id="btn-bond-text" class="text-[9px] md:text-[10px] font-bold">+Bond</span>
                 </div>
             </button>
-            <span id="tooltip-bond" class="tooltip">添加一个键合原子</span>
+            <span id="tooltip-bond" class="tooltip">Add a Bonding Pair</span>
         </div>
 
         <div class="has-tooltip relative">
-            <button id="add-lp" class="btn-action w-14 h-14 rounded-full bg-yellow-600 hover:bg-yellow-500 flex items-center justify-center shadow-lg border-2 border-yellow-400">
-                <div class="flex flex-col items-center">
+            <button id="add-lp" class="btn-action w-12 h-12 md:w-16 md:h-16 rounded-full bg-yellow-600 hover:bg-yellow-500 flex items-center justify-center shadow-lg border-2 border-yellow-400 active:bg-yellow-700">
+                <div class="flex flex-col items-center pointer-events-none">
                     <div class="flex gap-0.5 mb-0.5">
-                        <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
-                        <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+                        <div class="w-1 md:w-1.5 h-1 md:h-1.5 bg-white rounded-full"></div>
+                        <div class="w-1 md:w-1.5 h-1 md:h-1.5 bg-white rounded-full"></div>
                     </div>
-                    <span id="btn-lp-text" class="text-[10px] font-bold">+孤对</span>
+                    <span id="btn-lp-text" class="text-[9px] md:text-[10px] font-bold">+Lone</span>
                 </div>
             </button>
-            <span id="tooltip-lp" class="tooltip">添加一对孤对电子</span>
+            <span id="tooltip-lp" class="tooltip">Add a Lone Pair</span>
         </div>
 
-        <div class="w-px h-10 bg-gray-500 mx-2"></div>
+        <div class="w-px h-8 md:h-10 bg-gray-500 mx-1"></div>
 
-        <button id="remove-item" class="btn-action w-12 h-12 rounded-full bg-red-900/80 hover:bg-red-700 flex items-center justify-center border border-red-500 text-white" title="Remove Last">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <button id="remove-item" class="btn-action w-10 h-10 md:w-12 md:h-12 rounded-full bg-red-900/80 hover:bg-red-700 flex items-center justify-center border border-red-500 text-white shadow-md active:bg-red-800" title="Remove Last">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 md:h-6 md:w-6 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
             </svg>
         </button>
 
-        <button id="reset-btn" class="btn-action w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center border border-gray-500 text-white" title="Reset">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <button id="reset-btn" class="btn-action w-10 h-10 md:w-12 md:h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center border border-gray-500 text-white shadow-md active:bg-gray-800" title="Reset">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
         </button>
     </div>
 
     <!-- Notification Toast -->
-    <div id="toast" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/90 text-white px-6 py-4 rounded-xl text-center shadow-2xl transition-opacity duration-500 opacity-0 pointer-events-none z-50 border border-white/20">
-        <h2 id="toast-title" class="text-xl font-bold mb-1 text-green-400">完成！</h2>
-        <p id="toast-msg">你成功构建了目标分子。</p>
+    <div id="toast" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/90 text-white px-6 py-4 rounded-xl text-center shadow-2xl transition-opacity duration-500 opacity-0 pointer-events-none z-50 border border-white/20 w-10/12 md:w-auto">
+        <h2 id="toast-title" class="text-xl font-bold mb-1 text-green-400">Success!</h2>
+        <p id="toast-msg" class="text-sm">You built the target molecule.</p>
     </div>
 
     <script>
@@ -192,7 +210,7 @@
             lonePairs: 0,
             currentLevel: 0,
             mode: 'free', // 'free' or 'level'
-            lang: 'zh', // 'zh' or 'en'
+            lang: 'en', // Set Default to English
             detailsOpen: false
         };
 
@@ -415,8 +433,7 @@
             const total = bonds + lonePairs;
             let vectors = [];
             if (total === 1) {
-                // Added safe fallback for single atom/lonepair
-                vectors = [[1, 0, 0]]; 
+                 vectors = [[1, 0, 0]]; 
             } else if (total === 2) vectors = [[1,0,0], [-1,0,0]];
             else if (total === 3) {
                 const a = 2 * Math.PI / 3;
@@ -440,20 +457,17 @@
             const total = bonds + lonePairs;
             const assigned = { bonds: [], lps: [] };
             
-            // Guard clause for empty vectors
             if (!vectors || vectors.length === 0) return assigned;
 
             if (total === 5) {
                 for(let i=0; i<lonePairs; i++) assigned.lps.push(vectors[i]);
                 for(let i=lonePairs; i<total; i++) assigned.bonds.push(vectors[i]);
             } else if (total === 6) {
-                // For Octahedral we manually recreate vectors for better visualization order
                 const octOrder = [new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0), new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0), new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)];
                 for(let i=0; i<lonePairs; i++) assigned.lps.push(octOrder[i]);
                 for(let i=lonePairs; i<total; i++) assigned.bonds.push(octOrder[i]);
             } else {
                 for (let i = 0; i < lonePairs; i++) {
-                    // Use Math.max to prevent negative index access just in case, though total-1-i should be safe
                     const idx = Math.max(0, total - 1 - i);
                     if(vectors[idx]) assigned.lps.push(vectors[idx]);
                 }
@@ -510,7 +524,7 @@
 
             // Bonds
             assignedPos.bonds.forEach(vec => {
-                if (!vec) return; // Safety check
+                if (!vec) return; 
                 const distance = 2.5;
                 const pos = vec.clone().multiplyScalar(distance);
                 const stickHeight = distance - 0.5; 
@@ -528,7 +542,7 @@
 
             // Lone Pairs
             assignedPos.lps.forEach(vec => {
-                if (!vec) return; // Safety check
+                if (!vec) return; 
                 const distance = 1.8;
                 const pos = vec.clone().multiplyScalar(distance);
                 const lpGeo = new THREE.SphereGeometry(0.8, 32, 32);
@@ -714,7 +728,7 @@
         });
         
         gameState.mode = 'level'; 
-        updateStaticUI(); // Will trigger level UI update and render
+        updateStaticUI(); 
         animate();
 
     </script>
